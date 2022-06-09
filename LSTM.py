@@ -8,8 +8,6 @@ from torch.autograd import Variable
 from sklearn.preprocessing import MinMaxScaler
 from tool import *
 from matplotlib.pyplot import figure
-
-
 from torch.utils.data import Dataset, DataLoader
 
 torch.manual_seed(1)
@@ -18,7 +16,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class WaterLevelLSTM(nn.Module):
     # batch_first: true -> (batch, seq, feature: n_layers)
-    def __init__(self, num_classes, input_size, hidden_size, num_layers):
+    def __init__(self, num_classes, input_size, hidden_size, num_layers, seq_length):
         super(WaterLevelLSTM, self).__init__()
         
         self.num_classes = num_classes
@@ -48,13 +46,11 @@ class WaterLevelLSTM(nn.Module):
         
         return out       
 
-
-from sklearn import preprocessing
-
-def data_preprocessing():
+def data_preprocessing(sc, sc_w, seq_length, num_classes):
     dateList = timeRange('2007-01-01', '2018-06-30')
     startDate = datetime(2015, 1, 1, 0, 0)
     endDate = datetime(2018, 7, 1, 0, 0)
+    
     dq_df = pd.read_csv(r'D:\20190103_地下水專案_處理\水利署地下水位資料\觀測井每天的平均地下水位_已過濾.csv', encoding='big5', index_col = 0)
     dq_df['date'] = dq_df['date'].astype('datetime64')
     dq_df = dq_df.iloc[dq_df.loc[dq_df.date == startDate].index[0]:dq_df.loc[dq_df.date == endDate].index[0],:]
@@ -62,6 +58,7 @@ def data_preprocessing():
     del dq_df['index']
     well_name = 'HQ_九隆(3)'
     train_test_index = dq_df.loc[dq_df.date==datetime(2017, 1, 1, 0, 0)].index[0]
+
     date_index = dateList.index(startDate)
     ele_df = read_ele_csv(r'D:\JunShen\dataset\彰化_雲林用電量(非專用電表_day_raw.csv')
     ele_df = ele_df.iloc[date_index:,:100]
@@ -77,7 +74,7 @@ def data_preprocessing():
 
 
 
-    x, y = sliding_windows(df, 30, 60)
+    x, y = sliding_windows(df, seq_length, num_classes)
     
     dataX = Variable(torch.Tensor(np.array(x)))
     dataY = Variable(torch.Tensor(np.array(y)))
@@ -92,14 +89,13 @@ def data_preprocessing():
     print(trainX.size(), trainY.size())
     print(testX.size(), testY.size())
 
-    return dataX, dataY, trainX, trainY, testX, testY
+    return dataX, dataY, trainX, trainY, testX, testY, sc, sc_w
 
-if __name__ == "__main__":
+def main():
     sc = MinMaxScaler()
     sc_w = MinMaxScaler()
-    dataX, dataY, trainX, trainY, testX, testY = data_preprocessing()
 
-    num_epochs = 200
+    num_epochs = 50
     learning_rate = 0.005
 
     input_size = 100 # The number of expected features in the input x
@@ -108,7 +104,9 @@ if __name__ == "__main__":
     seq_length = 30
     num_classes = 60
 
-    model = WaterLevelLSTM(num_classes, input_size, hidden_size, num_layers)
+    dataX, dataY, trainX, trainY, testX, testY, sc, sc_w= data_preprocessing(sc, sc_w, seq_length, num_classes)
+
+    model = WaterLevelLSTM(num_classes, input_size, hidden_size, num_layers, seq_length)
 
     criterion = torch.nn.MSELoss()    # mean-squared error for regression
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -131,7 +129,6 @@ if __name__ == "__main__":
             val_loss = criterion(predicts, testY.view(predicts.size()))
 
         # eval
-
         if epoch % 10 == 0:
             print("Epoch: %d, loss: %1.5f, val_loss: %1.5f" % (epoch, loss.item(), val_loss.item()))
 
@@ -166,3 +163,7 @@ if __name__ == "__main__":
     plt.plot(data_predict60)
     plt.suptitle('Time-Series Prediction')
     plt.show()
+
+
+if __name__ == "__main__":
+    main()
