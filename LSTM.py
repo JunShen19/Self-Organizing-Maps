@@ -1,3 +1,4 @@
+from turtle import color
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -9,6 +10,8 @@ from sklearn.preprocessing import MinMaxScaler
 from tool import *
 from matplotlib.pyplot import figure
 from torch.utils.data import Dataset, DataLoader
+from torchmetrics import MeanSquaredError
+
 
 torch.manual_seed(1)
 
@@ -46,9 +49,20 @@ class WaterLevelLSTM(nn.Module):
         
         return out       
 
-def data_preprocessing(sc, sc_w, seq_length, num_classes):
+def data_mean_df(ele_df, read_dictionary):
+    ele_mean_df = pd.DataFrame()
+    ele_df.columns = ele_df.columns.str.replace("\.0","")
+
+    for i, v in enumerate(read_dictionary):
+        if len(read_dictionary[v]) == 0:
+            pass
+        else:
+            ele_mean_df[v] = ele_df.loc[:,read_dictionary[v].astype(str)].mean(axis=1).values
+    return ele_mean_df
+
+def data_preprocessing(ele_df, sc, sc_w, seq_length, num_classes, read_dictionary, set_name):
     dateList = timeRange('2007-01-01', '2018-06-30')
-    startDate = datetime(2015, 1, 1, 0, 0)
+    startDate = datetime(2007, 1, 1, 0, 0)
     endDate = datetime(2018, 7, 1, 0, 0)
     
     dq_df = pd.read_csv(r'D:\20190103_地下水專案_處理\水利署地下水位資料\觀測井每天的平均地下水位_已過濾.csv', encoding='big5', index_col = 0)
@@ -60,30 +74,40 @@ def data_preprocessing(sc, sc_w, seq_length, num_classes):
     train_test_index = dq_df.loc[dq_df.date==datetime(2017, 1, 1, 0, 0)].index[0]
 
     date_index = dateList.index(startDate)
-    ele_df = read_ele_csv(r'D:\JunShen\dataset\彰化_雲林用電量(非專用電表_day_raw.csv')
-    ele_df = ele_df.iloc[date_index:,:100]
-    ele_df = ele_df.fillna(value=ele_df.mean(numeric_only=True))
+    if set_name == "all_mean" or 'waterlevel':
+        pass
+    else:
+        ele_df.columns = ele_df.columns.str.replace("\.0","")
 
-    sc.fit(ele_df.iloc[:train_test_index,1:100])
-    ele_df = pd.DataFrame(sc.transform(ele_df.iloc[:,1:100]))
+        ele_value = read_dictionary[set_name]
+        ele_df = ele_df.loc[date_index:,ele_value.astype(str)]
+        ele_df = ele_df.fillna(value=ele_df.mean(numeric_only=True))
+    
+    sc.fit(ele_df.iloc[:train_test_index,:])
+    ele_df = pd.DataFrame(sc.transform(ele_df.iloc[:,:]))
 
+    #　waterlevel
     sc_w.fit(dq_df.loc[:train_test_index,well_name].values.reshape(-1, 1))
     df = pd.DataFrame(sc_w.transform(dq_df.loc[:,well_name].values.reshape(-1, 1)))
 
-    df = pd.concat([ele_df, df], axis=1)
-
-
+    if set_name == "waterlevel":
+        pass
+    else:
+        df = pd.concat([ele_df, df], axis=1)
 
     x, y = sliding_windows(df, seq_length, num_classes)
+
+    del df
+    del ele_df
     
     dataX = Variable(torch.Tensor(np.array(x)))
     dataY = Variable(torch.Tensor(np.array(y)))
 
-    trainX = Variable(torch.Tensor(np.array(x[0:train_test_index-30])))
-    trainY = Variable(torch.Tensor(np.array(y[0:train_test_index-30])))
+    trainX = Variable(torch.Tensor(np.array(x[0:train_test_index-seq_length])))
+    trainY = Variable(torch.Tensor(np.array(y[0:train_test_index-seq_length])))
 
-    testX = Variable(torch.Tensor(np.array(x[train_test_index-30:len(x)])))
-    testY = Variable(torch.Tensor(np.array(y[train_test_index-30:len(y)])))
+    testX = Variable(torch.Tensor(np.array(x[train_test_index-seq_length:len(x)])))
+    testY = Variable(torch.Tensor(np.array(y[train_test_index-seq_length:len(y)])))
 
     print(dataX.size(), dataY.size())
     print(trainX.size(), trainY.size())
@@ -91,20 +115,30 @@ def data_preprocessing(sc, sc_w, seq_length, num_classes):
 
     return dataX, dataY, trainX, trainY, testX, testY, sc, sc_w
 
+
 def main():
     sc = MinMaxScaler()
     sc_w = MinMaxScaler()
 
-    num_epochs = 50
+    num_epochs = 400
     learning_rate = 0.005
 
-    input_size = 100 # The number of expected features in the input x
     hidden_size = 256 
     num_layers = 1
     seq_length = 30
     num_classes = 60
 
-    dataX, dataY, trainX, trainY, testX, testY, sc, sc_w= data_preprocessing(sc, sc_w, seq_length, num_classes)
+    set_name = "all_mean"
+
+    read_dictionary = np.load('som_ele_dict.npy',allow_pickle='TRUE').item()
+    ele_df = read_ele_csv(r'D:\JunShen\dataset\彰化_雲林用電量(專用電表_day_raw.csv')
+
+    ele_mean_df = data_mean_df(ele_df, read_dictionary)
+
+    dataX, dataY, trainX, trainY, testX, testY, sc, sc_w= data_preprocessing(ele_mean_df, sc, sc_w, seq_length, num_classes, read_dictionary, set_name)
+
+    input_size = dataX.shape[-1] # The number of expected features in the input x
+
 
     model = WaterLevelLSTM(num_classes, input_size, hidden_size, num_layers, seq_length)
 
@@ -132,9 +166,6 @@ def main():
         if epoch % 10 == 0:
             print("Epoch: %d, loss: %1.5f, val_loss: %1.5f" % (epoch, loss.item(), val_loss.item()))
 
-        
-
-
     model.eval()
     train_predict = model(dataX)
 
@@ -154,16 +185,29 @@ def main():
         dataY_plot60.append(dataY_plot[i,-1])
     dataY_plot60 = np.array(dataY_plot60).flatten()
 
+    data_predict_train = list(data_predict[0,:])
+    for i in range(1,len(data_predict)-testX.shape[0]-num_classes+1):
+        data_predict_train.append(data_predict[i,-1])
+    data_predict_train = np.array(data_predict_train).flatten()
+    data_predict_test = list(data_predict[trainX.shape[0],:])
+    for i in range(trainX.shape[0]+1,len(data_predict)):
+        data_predict_test.append(data_predict[i,-1])
+    data_predict_test = np.array(data_predict_test).flatten()
+    data_predict_test = np.concatenate([data_predict_train,data_predict_test])
 
     figure(figsize=(20, 16), dpi=80)
-    plt.axvline(x=3653-30, c='r', linestyle='--')
-    plt.axvline(x=3653+30, c='r', linestyle='--')
+    plt.axvline(x=3653-seq_length, c='r', linestyle='--')
+    plt.axvline(x=3653+seq_length, c='r', linestyle='--')
 
-    plt.plot(dataY_plot60)
-    plt.plot(data_predict60)
+    plt.plot(dataY_plot60, color = 'r')
+    plt.plot(data_predict_test, color = 'b')
+    plt.plot(data_predict60, color = 'y')
     plt.suptitle('Time-Series Prediction')
     plt.show()
 
+    # 單位不同(正規化已經反轉)
+    mean_squared_error = MeanSquaredError()
+    print(mean_squared_error(torch.tensor(data_predict[trainX.shape[0],:]), torch.tensor(dataY_plot[trainX.shape[0],:])))
 
 if __name__ == "__main__":
     main()
