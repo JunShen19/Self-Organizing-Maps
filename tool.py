@@ -48,7 +48,6 @@ def ACC(test, pred, th):
     max_test = max(test)
     th = (max_test - min_test) * th    
     for i in range(len(test)):
-
         if (test[i] - th) < pred[i] < (test[i] + th):
             right += 1
 
@@ -108,3 +107,5 @@ def sliding_windows(df, seq_length, pred_length):
         y.append(_y)
 
     return np.array(x),np.array(y)
+
+
